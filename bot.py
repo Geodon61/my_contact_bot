@@ -15,9 +15,9 @@ from telebot import TeleBot, types
 import telebot
 
 # ========== НАСТРОЙКИ ==========
-BOT_TOKEN = "ТВОЙ_ТОКЕН_БОТА_СЮДА"  # Получи у @BotFather
+BOT_TOKEN = "8491886115:AAHZrWx-0T5hvZlfibyhG7ITQUOxExMzucs"  # Получи у @BotFather
 ADMIN_ID = 5171909366  # ТЫ (видишь всё)
-FRIEND_ID = 123456789  # 👈 СЮДА ВСТАВЬ ID ПОДРУГИ (она будет основным пользователем)
+FRIEND_ID = 6665694522  # 👈 СЮДА ВСТАВЬ ID ПОДРУГИ (она будет основным пользователем)
 
 # ========== ИНИЦИАЛИЗАЦИЯ ==========
 bot = TeleBot(BOT_TOKEN)
@@ -379,4 +379,5 @@ if __name__ == "__main__":
     print(f"👩 Подруга ID: {FRIEND_ID}")
 
     bot.remove_webhook()
+
     bot.infinity_polling(timeout=60, long_polling_timeout=30)
